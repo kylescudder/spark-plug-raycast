@@ -6,7 +6,7 @@
   "icon": "extension-icon.png",
   "author": "kylescudder",
   "license": "MIT",
-  "categories": ["Developer Tools"],
+  "categories": ["Developer Tools", "Productivity", "Applications"],
   "commands": [
     {
       "name": "list-worktrees",
