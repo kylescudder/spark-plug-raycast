@@ -1,11 +1,9 @@
 #!/usr/bin/env swift
 import AppKit
 
-// Composites each provided screenshot onto a 2000×1250 Raycast-purple gradient
-// canvas. Auto-detects the actual Raycast window inside the source PNG by
-// scanning from each edge inward for the first row/column whose pixels differ
-// from the corner sample (assumed to be desktop wallpaper). Applies a rounded-
-// corner clip when drawing so any residual corner pixels are hidden.
+// Trims the uniform border around a Raycast screenshot (whatever colour it is —
+// inferred from the corner pixel) and composites the result onto a 2000×1250
+// dark gradient with a rounded clip + soft drop shadow.
 //
 // Usage:
 //   swift scripts/make-screenshots.swift \
@@ -19,96 +17,107 @@ guard CommandLine.arguments.count > 1 else {
 let canvasW: CGFloat = 2000
 let canvasH: CGFloat = 1250
 
-func loadBitmap(at path: String) -> NSBitmapImageRep? {
-    let url = URL(fileURLWithPath: path)
-    guard let data = try? Data(contentsOf: url),
-          let rep = NSBitmapImageRep(data: data) else { return nil }
-    return rep
+struct FastBitmap {
+    let buf: [UInt8]
+    let width: Int
+    let height: Int
+
+    init?(_ rep: NSBitmapImageRep) {
+        let w = rep.pixelsWide
+        let h = rep.pixelsHigh
+        let bpr = w * 4
+        var buf = [UInt8](repeating: 0, count: bpr * h)
+        let ok = buf.withUnsafeMutableBufferPointer { ptr -> Bool in
+            guard let cs = CGColorSpace(name: CGColorSpace.sRGB),
+                  let cg = rep.cgImage,
+                  let ctx = CGContext(
+                    data: ptr.baseAddress,
+                    width: w, height: h,
+                    bitsPerComponent: 8, bytesPerRow: bpr,
+                    space: cs,
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                  )
+            else { return false }
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
+        }
+        guard ok else { return nil }
+        self.buf = buf
+        self.width = w
+        self.height = h
+    }
+
+    /// (r, g, b) for the pixel at (x, y) with origin TOP-LEFT.
+    @inline(__always)
+    func rgb(_ x: Int, _ y: Int) -> (Double, Double, Double) {
+        // CGContext stores rows bottom-up; flip y to map to a top-left origin.
+        let row = height - 1 - y
+        let o = row * width * 4 + x * 4
+        return (
+            Double(buf[o]) / 255.0,
+            Double(buf[o + 1]) / 255.0,
+            Double(buf[o + 2]) / 255.0
+        )
+    }
 }
 
-/// Detects the bounding box of the Raycast window inside the source bitmap by
-/// scanning for the first non-wallpaper pixel from each edge. Returns the rect
-/// in pixel coordinates of the source.
-func detectWindowRect(_ rep: NSBitmapImageRep) -> NSRect {
-    let w = rep.pixelsWide
-    let h = rep.pixelsHigh
+/// Trims a uniform border. Samples the four corners to find the border colour,
+/// then scans each edge inward to find the first row/column whose pixels
+/// (mostly) differ from it. Returns the inner content rect.
+func trimUniformBorder(_ bmp: FastBitmap) -> NSRect {
+    let w = bmp.width
+    let h = bmp.height
 
-    // Sample wallpaper from a few corner pixels and take the mean as the
-    // reference colour. We pick (4,4) etc to avoid any anti-aliasing at the
-    // outermost edge.
-    let samples = [(4, 4), (w - 5, 4), (4, h - 5), (w - 5, h - 5)]
-    var rSum = 0.0, gSum = 0.0, bSum = 0.0
-    for (sx, sy) in samples {
-        if let c = rep.colorAt(x: sx, y: sy) {
-            rSum += c.redComponent
-            gSum += c.greenComponent
-            bSum += c.blueComponent
-        }
+    // Average the corner samples for the reference colour.
+    let corners = [(2, 2), (w - 3, 2), (2, h - 3), (w - 3, h - 3)]
+    var rs = 0.0, gs = 0.0, bs = 0.0
+    for (x, y) in corners {
+        let (r, g, b) = bmp.rgb(x, y)
+        rs += r; gs += g; bs += b
     }
-    let refR = CGFloat(rSum / Double(samples.count))
-    let refG = CGFloat(gSum / Double(samples.count))
-    let refB = CGFloat(bSum / Double(samples.count))
+    let refR = rs / 4, refG = gs / 4, refB = bs / 4
 
+    @inline(__always)
     func differs(_ x: Int, _ y: Int) -> Bool {
-        guard let c = rep.colorAt(x: x, y: y) else { return false }
-        let d = abs(c.redComponent - refR)
-              + abs(c.greenComponent - refG)
-              + abs(c.blueComponent - refB)
-        // Tight threshold: Raycast's translucent edge blends with the wallpaper,
-        // so we only count clearly darker (interior) pixels as "window". This
-        // crops through the glass halo to the solid content area.
-        return d > 0.55
+        let (r, g, b) = bmp.rgb(x, y)
+        return abs(r - refR) + abs(g - refG) + abs(b - refB) > 0.10
     }
 
-    // From each edge, find the first row/column with a streak of non-wallpaper
-    // pixels (avoids being fooled by isolated outliers like cursor glints).
-    let streak = 16
+    func rowHasContent(_ y: Int) -> Bool {
+        var hits = 0
+        for x in 0..<w {
+            if differs(x, y) {
+                hits += 1
+                if hits >= 24 { return true }
+            } else {
+                hits = 0
+            }
+        }
+        return false
+    }
+    func colHasContent(_ x: Int) -> Bool {
+        var hits = 0
+        for y in 0..<h {
+            if differs(x, y) {
+                hits += 1
+                if hits >= 24 { return true }
+            } else {
+                hits = 0
+            }
+        }
+        return false
+    }
 
-    var left = 0
-    for x in 0..<(w / 2) {
-        var hits = 0
-        for y in 0..<h {
-            if differs(x, y) { hits += 1; if hits >= streak { break } } else { hits = 0 }
-        }
-        if hits >= streak { left = x; break }
-    }
-    var right = w
-    for x in stride(from: w - 1, through: w / 2, by: -1) {
-        var hits = 0
-        for y in 0..<h {
-            if differs(x, y) { hits += 1; if hits >= streak { break } } else { hits = 0 }
-        }
-        if hits >= streak { right = x + 1; break }
-    }
     var top = 0
-    for y in 0..<(h / 2) {
-        var hits = 0
-        for x in 0..<w {
-            if differs(x, y) { hits += 1; if hits >= streak { break } } else { hits = 0 }
-        }
-        if hits >= streak { top = y; break }
-    }
-    var bottom = h
-    for y in stride(from: h - 1, through: h / 2, by: -1) {
-        var hits = 0
-        for x in 0..<w {
-            if differs(x, y) { hits += 1; if hits >= streak { break } } else { hits = 0 }
-        }
-        if hits >= streak { bottom = y + 1; break }
-    }
+    for y in 0..<h { if rowHasContent(y) { top = y; break } }
+    var bottom = h - 1
+    for y in stride(from: h - 1, through: 0, by: -1) { if rowHasContent(y) { bottom = y; break } }
+    var left = 0
+    for x in 0..<w { if colHasContent(x) { left = x; break } }
+    var right = w - 1
+    for x in stride(from: w - 1, through: 0, by: -1) { if colHasContent(x) { right = x; break } }
 
-    // Sanity guard — if detection found nothing, return full rect.
-    if right - left < 100 || bottom - top < 100 {
-        return NSRect(x: 0, y: 0, width: w, height: h)
-    }
-    // Push outward a few pixels to keep the rounded corners (we re-apply our
-    // own rounded clip when drawing) while still excluding the glass halo.
-    let pad = -4
-    let l = max(0, left + pad)
-    let r = min(w, right - pad)
-    let t = max(0, top + pad)
-    let b = min(h, bottom - pad)
-    return NSRect(x: l, y: t, width: r - l, height: b - t)
+    return NSRect(x: left, y: top, width: right - left + 1, height: bottom - top + 1)
 }
 
 for arg in CommandLine.arguments.dropFirst() {
@@ -120,16 +129,19 @@ for arg in CommandLine.arguments.dropFirst() {
     let outPath = parts[0]
     let srcPath = parts[1]
 
-    guard let srcRep = loadBitmap(at: srcPath) else {
+    guard let srcRep = NSBitmapImageRep(data: (try? Data(contentsOf: URL(fileURLWithPath: srcPath))) ?? Data()) else {
         FileHandle.standardError.write(Data("could not read \(srcPath)\n".utf8))
         continue
     }
     let srcW = srcRep.pixelsWide
     let srcH = srcRep.pixelsHigh
 
-    // colorAt indexes pixels with origin at top-left. Convert to bottom-up
-    // for drawing rect.
-    let cropPx = detectWindowRect(srcRep)
+    guard let bmp = FastBitmap(srcRep) else {
+        FileHandle.standardError.write(Data("could not access bitmap data for \(srcPath)\n".utf8))
+        continue
+    }
+
+    let cropPx = trimUniformBorder(bmp)
     let cropFlipped = NSRect(
         x: cropPx.minX,
         y: CGFloat(srcH) - cropPx.maxY,
@@ -137,7 +149,7 @@ for arg in CommandLine.arguments.dropFirst() {
         height: cropPx.height
     )
 
-    // Crop the source by drawing it offset into a fresh image at the crop size.
+    // Crop the source into a fresh image at the crop size.
     let cropped = NSImage(size: NSSize(width: cropPx.width, height: cropPx.height))
     cropped.lockFocus()
     NSGraphicsContext.current?.imageInterpolation = .high
@@ -152,37 +164,36 @@ for arg in CommandLine.arguments.dropFirst() {
     cropped.unlockFocus()
 
     // Build the canvas.
-    guard let rep = NSBitmapImageRep(
+    guard let outRep = NSBitmapImageRep(
         bitmapDataPlanes: nil, pixelsWide: Int(canvasW), pixelsHigh: Int(canvasH),
         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
         isPlanar: false, colorSpaceName: .deviceRGB,
         bytesPerRow: 0, bitsPerPixel: 32
     ) else { fatalError("rep") }
-    rep.size = NSSize(width: canvasW, height: canvasH)
+    outRep.size = NSSize(width: canvasW, height: canvasH)
 
-    guard let ctx = NSGraphicsContext(bitmapImageRep: rep) else { fatalError("ctx") }
+    guard let ctx = NSGraphicsContext(bitmapImageRep: outRep) else { fatalError("ctx") }
     let prev = NSGraphicsContext.current
     NSGraphicsContext.current = ctx
     ctx.imageInterpolation = .high
 
-    // Dark backdrop — keeps the Raycast window the visual focus and avoids
-    // a "two-tone" clash with the window's own translucent purple glass.
+    // Dark gradient backdrop.
     let topColor = NSColor(red: 0.06, green: 0.05, blue: 0.12, alpha: 1.0)
     let bottomColor = NSColor(red: 0.16, green: 0.12, blue: 0.28, alpha: 1.0)
     let gradient = NSGradient(starting: topColor, ending: bottomColor)!
     gradient.draw(in: NSRect(x: 0, y: 0, width: canvasW, height: canvasH), angle: 90)
 
-    // Compute draw rect, preserving aspect ratio.
+    // Compute draw rect preserving aspect ratio.
     let marginX: CGFloat = 200
     let marginY: CGFloat = 125
     let maxW = canvasW - marginX * 2
     let maxH = canvasH - marginY * 2
-    let srcAspect = cropped.size.width / cropped.size.height
+    let aspect = cropped.size.width / cropped.size.height
     var drawW = maxW
-    var drawH = drawW / srcAspect
+    var drawH = drawW / aspect
     if drawH > maxH {
         drawH = maxH
-        drawW = drawH * srcAspect
+        drawW = drawH * aspect
     }
     let drawRect = NSRect(
         x: (canvasW - drawW) / 2,
@@ -191,25 +202,20 @@ for arg in CommandLine.arguments.dropFirst() {
         height: drawH
     )
 
-    // Soft drop shadow under the window.
+    // Drop shadow + rounded clip.
     NSGraphicsContext.saveGraphicsState()
     let shadow = NSShadow()
-    shadow.shadowColor = NSColor(white: 0, alpha: 0.45)
-    shadow.shadowOffset = NSSize(width: 0, height: -12)
+    shadow.shadowColor = NSColor(white: 0, alpha: 0.5)
+    shadow.shadowOffset = NSSize(width: 0, height: -14)
     shadow.shadowBlurRadius = 60
     shadow.set()
-
-    // Rounded-corner clip so any residual wallpaper at the crop corners is hidden.
-    let cornerRadius: CGFloat = 24
-    let mask = NSBezierPath(roundedRect: drawRect, xRadius: cornerRadius, yRadius: cornerRadius)
-    mask.addClip()
-
+    NSBezierPath(roundedRect: drawRect, xRadius: 28, yRadius: 28).addClip()
     cropped.draw(in: drawRect, from: .zero, operation: .sourceOver, fraction: 1.0)
     NSGraphicsContext.restoreGraphicsState()
 
     NSGraphicsContext.current = prev
 
-    guard let png = rep.representation(using: .png, properties: [:]) else {
+    guard let png = outRep.representation(using: .png, properties: [:]) else {
         fatalError("png encode")
     }
     let outURL = URL(fileURLWithPath: outPath)
@@ -218,5 +224,5 @@ for arg in CommandLine.arguments.dropFirst() {
         withIntermediateDirectories: true
     )
     try png.write(to: outURL)
-    print("✓ \(outPath) — cropped source to \(Int(cropPx.width))×\(Int(cropPx.height)) (was \(srcW)×\(srcH))")
+    print("✓ \(outPath) — trimmed to \(Int(cropPx.width))×\(Int(cropPx.height)) from \(srcW)×\(srcH)")
 }
