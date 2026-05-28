@@ -13,7 +13,8 @@
       "title": "List Worktrees",
       "subtitle": "Spark Plug",
       "description": "Browse worktrees and start or resume Claude Code sessions",
-      "mode": "view"
+      "mode": "view",
+      "keywords": ["claude", "claude code", "worktree", "git", "session", "terminal"]
     }
   ],
   "preferences": [
