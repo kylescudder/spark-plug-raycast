@@ -12,17 +12,18 @@ Mirrors the [Spark Plug menubar app](https://github.com/kylescudder/spark-plug):
 
 ## Setup
 
-1. Install: open this folder in Raycast (`File → Import Extension`) or run `npm install && npm run dev` from the project root.
+1. Install dependencies and start dev mode: `bun install && bun run dev` from the project root. That symlinks the extension into Raycast.
 2. Set the **Worktrees Folder** preference to the directory containing your worktrees (e.g. `~/worktrees`).
 3. Ensure the `claude` CLI is on your PATH inside Terminal.app.
 
 ## Development
 
 ```sh
-npm install
-npm run dev    # symlinks the extension into Raycast for live reload
-npm run lint
-npm run build  # produces dist/ for store submission
+bun install
+bun run dev      # symlinks the extension into Raycast for live reload
+bun run lint
+bun run build    # produces dist/ for store submission
+bun run publish  # submits to the Raycast store
 ```
 
 ## How session detection works
