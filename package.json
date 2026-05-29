@@ -25,6 +25,22 @@
       "type": "textfield",
       "default": "~/worktrees",
       "required": true
+    },
+    {
+      "name": "sourceRepo",
+      "title": "Default Source Repo",
+      "description": "Repo that New Worktree branches from (supports ~ expansion). Pre-fills the form; can be overridden per worktree.",
+      "type": "textfield",
+      "default": "",
+      "required": false
+    },
+    {
+      "name": "setupCommandTemplate",
+      "title": "Worktree Setup Command",
+      "description": "Command run in the source repo to create & provision the worktree. Placeholders: {ticket} {brief} {base}",
+      "type": "textfield",
+      "default": "./scripts/mpro-worktree.sh {ticket} {brief} {base}",
+      "required": false
     }
   ],
   "dependencies": {

@@ -24,10 +24,13 @@ import {
   sessionLabel,
   sessionTitle,
 } from "./claude-sessions";
-import { launchClaude } from "./launch";
+import { createWorktree, launchClaude } from "./launch";
+import { removeWorktree } from "./git";
 
 interface Preferences {
   worktreesRoot: string;
+  sourceRepo: string;
+  setupCommandTemplate: string;
 }
 
 interface Worktree {
@@ -135,6 +138,98 @@ function NewSessionForm({
   );
 }
 
+function NewWorktreeForm({
+  defaultSourceRepo,
+  worktreesRoot,
+  setupCommandTemplate,
+  onStarted,
+}: {
+  defaultSourceRepo: string;
+  worktreesRoot: string;
+  setupCommandTemplate: string;
+  onStarted: () => void;
+}) {
+  const { pop } = useNavigation();
+  const root = expandHome(worktreesRoot.trim());
+  return (
+    <Form
+      navigationTitle="New Worktree"
+      actions={
+        <ActionPanel>
+          <Action.SubmitForm
+            title="Create & Start Claude"
+            icon={Icon.Plus}
+            onSubmit={async (values: {
+              sourceRepo: string;
+              ticket: string;
+              brief: string;
+              base: string;
+            }) => {
+              const sourceRepo = expandHome(values.sourceRepo.trim());
+              const ticket = values.ticket.trim();
+              const brief = values.brief.trim();
+              const base = values.base.trim() || "develop";
+              if (!sourceRepo || !ticket || !brief) {
+                await showToast({
+                  style: Toast.Style.Failure,
+                  title: "Source repo, ticket and brief are required",
+                });
+                return;
+              }
+              const worktreePath = join(root, `${ticket}_${brief}`);
+              try {
+                await createWorktree({
+                  sourceRepo,
+                  worktreePath,
+                  ticket,
+                  briefName: brief,
+                  baseBranch: base,
+                  setupCommandTemplate,
+                });
+                pop();
+                onStarted();
+              } catch (e) {
+                await showToast({
+                  style: Toast.Style.Failure,
+                  title: "Failed to launch",
+                  message: String(e),
+                });
+              }
+            }}
+          />
+        </ActionPanel>
+      }
+    >
+      <Form.TextField
+        id="sourceRepo"
+        title="Source Repo"
+        placeholder="~/Documents/Repos/your-repo"
+        defaultValue={defaultSourceRepo}
+      />
+      <Form.TextField
+        id="ticket"
+        title="Ticket"
+        placeholder="MP5-12345"
+        autoFocus
+      />
+      <Form.TextField
+        id="brief"
+        title="Brief Name"
+        placeholder="FixAuthTimeout"
+      />
+      <Form.TextField
+        id="base"
+        title="Base Branch"
+        placeholder="develop"
+        defaultValue="develop"
+      />
+      <Form.Description
+        text={`Runs the setup command in the source repo, then opens Claude in ${root}/<ticket>_<brief>.`}
+      />
+    </Form>
+  );
+}
+
 export default function Command() {
   const prefs = getPreferenceValues<Preferences>();
   const [state, setState] = useState<{ trees: Worktree[]; error?: string }>({
@@ -152,6 +247,26 @@ export default function Command() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  const openNewWorktree = useCallback(() => {
+    push(
+      <NewWorktreeForm
+        defaultSourceRepo={prefs.sourceRepo ?? ""}
+        worktreesRoot={prefs.worktreesRoot}
+        setupCommandTemplate={
+          prefs.setupCommandTemplate ??
+          "./scripts/mpro-worktree.sh {ticket} {brief} {base}"
+        }
+        onStarted={refresh}
+      />,
+    );
+  }, [
+    push,
+    refresh,
+    prefs.sourceRepo,
+    prefs.worktreesRoot,
+    prefs.setupCommandTemplate,
+  ]);
 
   const emptyDescription = useMemo(() => {
     if (state.error) return state.error;
@@ -171,6 +286,12 @@ export default function Command() {
           description={emptyDescription}
           actions={
             <ActionPanel>
+              <Action
+                title="New Worktree…"
+                icon={Icon.NewFolder}
+                shortcut={{ modifiers: ["cmd"], key: "n" }}
+                onAction={openNewWorktree}
+              />
               <Action
                 title="Refresh"
                 icon={Icon.ArrowClockwise}
@@ -209,6 +330,12 @@ export default function Command() {
                   onAction={() =>
                     push(<NewSessionForm worktree={wt} onStarted={refresh} />)
                   }
+                />
+                <Action
+                  title="New Worktree…"
+                  icon={Icon.NewFolder}
+                  shortcut={{ modifiers: ["cmd"], key: "n" }}
+                  onAction={openNewWorktree}
                 />
 
                 {wt.sessions.length > 0 && (
@@ -308,6 +435,47 @@ export default function Command() {
                   icon={Icon.ArrowClockwise}
                   shortcut={{ modifiers: ["cmd"], key: "r" }}
                   onAction={refresh}
+                />
+                <Action
+                  title="Delete Worktree…"
+                  icon={Icon.Trash}
+                  style={Action.Style.Destructive}
+                  shortcut={{ modifiers: ["ctrl"], key: "x" }}
+                  onAction={async () => {
+                    if (wt.sessions.some((s) => s.isLive)) {
+                      await showToast({
+                        style: Toast.Style.Failure,
+                        title: "Cannot delete worktree",
+                        message: "A live Claude session is running here.",
+                      });
+                      return;
+                    }
+                    const confirmed = await confirmAlert({
+                      title: `Delete worktree "${wt.name}"?`,
+                      message:
+                        "This permanently deletes the folder and everything in it. If it's a git worktree, any uncommitted changes are lost.",
+                      primaryAction: {
+                        title: "Delete Worktree",
+                        style: Alert.ActionStyle.Destructive,
+                      },
+                    });
+                    if (!confirmed) return;
+                    try {
+                      removeWorktree(wt.path);
+                      await showToast({
+                        style: Toast.Style.Success,
+                        title: "Worktree deleted",
+                        message: wt.name,
+                      });
+                      refresh();
+                    } catch (e) {
+                      await showToast({
+                        style: Toast.Style.Failure,
+                        title: "Delete failed",
+                        message: String(e),
+                      });
+                    }
+                  }}
                 />
               </ActionPanel>
             }
