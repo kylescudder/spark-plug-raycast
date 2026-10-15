@@ -203,7 +203,7 @@ function NewWorktreeForm({
       <Form.TextField
         id="sourceRepo"
         title="Source Repo"
-        placeholder="~/Documents/Repos/your-repo"
+        placeholder="~/Development/Repos/your-repo"
         defaultValue={defaultSourceRepo}
       />
       <Form.TextField
