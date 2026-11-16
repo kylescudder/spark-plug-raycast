@@ -6,7 +6,11 @@
   "icon": "extension-icon.png",
   "author": "kylescudder",
   "license": "MIT",
-  "categories": ["Developer Tools", "Productivity", "Applications"],
+  "categories": [
+    "Developer Tools",
+    "Productivity",
+    "Applications"
+  ],
   "commands": [
     {
       "name": "list-worktrees",
@@ -14,7 +18,14 @@
       "subtitle": "Spark Plug",
       "description": "Browse worktrees and start or resume Claude Code sessions",
       "mode": "view",
-      "keywords": ["claude", "claude code", "worktree", "git", "session", "terminal"]
+      "keywords": [
+        "claude",
+        "claude code",
+        "worktree",
+        "git",
+        "session",
+        "terminal"
+      ]
     }
   ],
   "preferences": [
@@ -61,6 +72,7 @@
     "dev": "ray develop",
     "lint": "ray lint",
     "fix-lint": "ray lint --fix",
-    "publish": "bunx @raycast/api@latest publish"
+    "publish": "bunx @raycast/api@latest publish",
+    "test:e2e": "sh -c 'export HOME=\"$(mktemp -d)\" && export SPARK_PLUG_E2E_HOME=\"$HOME\" && exec bun test e2e'"
   }
 }
