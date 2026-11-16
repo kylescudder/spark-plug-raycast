@@ -31,3 +31,17 @@ bun run publish  # submits to the Raycast store
 Claude Code stores session transcripts at `~/.claude/projects/<encoded-path>/<session-id>.jsonl`. The directory name is the worktree path with every non-alphanumeric character replaced by a hyphen. Live sessions register themselves under `~/.claude/sessions/<pid>.json` while running. Spark Plug reads both to build the worktree list and badge.
 
 Session names use Claude Code's native `-n, --name` flag, which writes a `custom-title` line into the transcript. No sidecar metadata needed.
+
+## End-to-end check
+
+`bun run test:e2e` starts Bun with a throwaway `HOME` and exercises everything the
+extension does outside Raycast's UI, against real files, git and `/bin/sh`:
+
+- Claude transcripts are listed newest first, with custom titles, first prompts and live state.
+- Linked git worktrees are force-removed and pruned; plain folders are deleted.
+- The exact command sent to Terminal is executed with stub `claude`/`clear` binaries.
+  It must open the right directory with the right arguments, even when paths and names
+  contain quotes, `$(…)` or `;`.
+
+The Raycast UI itself only runs inside the Raycast app and is not covered. Pull requests
+run this suite in the **E2E tests** job.
